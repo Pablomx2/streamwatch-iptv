@@ -136,9 +136,6 @@
   .stream-btn.active { background: #e63946; border-color: #e63946; color: #fff; }
   .stream-btn .hd-tag { font-size: 9px; font-weight: 700; background: #2563eb; color: #fff; padding: 1px 4px; border-radius: 3px; letter-spacing: 0.3px; }
   .stream-btn.active .hd-tag { background: rgba(255,255,255,0.25); }
-  /* A stream that failed to load this session — dimmed so the auto-skip is legible */
-  .stream-btn.dead { opacity: 0.4; text-decoration: line-through; }
-  .stream-btn.dead.active { background: #5a2a2e; border-color: #5a2a2e; text-decoration: none; }
 
   .player-area { flex: 1; position: relative; background: #000; display: flex; align-items: center; justify-content: center; }
   #player { width: 100%; height: 100%; background: #000; }
@@ -416,6 +413,10 @@
     document.querySelector(`.stream-btn[data-i="${index}"]`)?.classList.add(cls);
   }
 
+  function removeStreamButton(index) {
+    document.querySelector(`.stream-btn[data-i="${index}"]`)?.remove();
+  }
+
   function proxied(url) {
     return `${PROXY_BASE}/proxy?url=${encodeURIComponent(url)}`;
   }
@@ -456,9 +457,11 @@
         loadStream(channel, index, true); // retry this same stream through the proxy first
         return;
       }
-      markStreamButton(index, 'dead');
+      removeStreamButton(index);
       deadStreams.add(`${channel.id}:${index}`);
-      loadStream(channel, index + 1);
+      let next = index + 1;
+      while (next < channel.streams.length && deadStreams.has(`${channel.id}:${next}`)) next++;
+      loadStream(channel, next);
     };
 
     video.onerror = advance;
@@ -487,12 +490,19 @@
 
     const bar = document.getElementById('stream-bar');
     const btns = document.getElementById('stream-btns');
-    if (channel.streams.length > 1) {
+    // Streams already known dead from earlier in this session are left out of the
+    // picker entirely, rather than shown disabled — nothing to pick if it won't play.
+    const liveIndices = channel.streams
+      .map((s, i) => i)
+      .filter(i => !deadStreams.has(`${channel.id}:${i}`));
+    if (liveIndices.length > 1) {
       bar.classList.add('show');
-      btns.innerHTML = channel.streams.map((s, i) =>
-        `<button class="stream-btn ${deadStreams.has(`${channel.id}:${i}`) ? 'dead' : ''}" data-i="${i}">
+      btns.innerHTML = liveIndices.map(i => {
+        const s = channel.streams[i];
+        return `<button class="stream-btn" data-i="${i}">
            ${s.label}${s.quality ? `<span class="hd-tag">${s.quality}</span>` : ''}
-         </button>`).join('');
+         </button>`;
+      }).join('');
       btns.querySelectorAll('.stream-btn').forEach(btn => {
         btn.addEventListener('click', () => loadStream(channel, +btn.dataset.i));
       });
@@ -501,7 +511,8 @@
       btns.innerHTML = '';
     }
 
-    loadStream(channel, 0);
+    // Skip straight past any streams already known dead from earlier this session.
+    loadStream(channel, liveIndices.length ? liveIndices[0] : channel.streams.length);
   }
 
   function closeModal() {
