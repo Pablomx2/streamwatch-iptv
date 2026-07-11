@@ -215,6 +215,15 @@
   // from the browser on any host.
   const IPTV_BASE = 'https://iptv-org.github.io/api';
 
+  // Optional CORS-unlocking proxy (see cloudflare-worker.js in this repo) for
+  // streams whose manifest locks Access-Control-Allow-Origin to their own domain
+  // (common with Pluto TV re-broadcasts) — a restriction the browser enforces even
+  // for native <video> HLS playback, so no client-side header trick can get around
+  // it. Leave blank to skip proxying entirely (those streams just get auto-skipped
+  // by loadStream's dead-stream fallback instead of playing). Deploy the Worker,
+  // then set this to your https://<name>.<subdomain>.workers.dev URL.
+  const PROXY_BASE = '';
+
   // Same per-sport bucket set + emoji as the main streamwatch app's SPORT_EMOJI,
   // so the tab bar and pills read identically across both versions.
   const SPORT_EMOJI = {
@@ -407,15 +416,22 @@
     document.querySelector(`.stream-btn[data-i="${index}"]`)?.classList.add(cls);
   }
 
+  function proxied(url) {
+    return `${PROXY_BASE}/proxy?url=${encodeURIComponent(url)}`;
+  }
+
   // Loads streams[index] for `channel`. On playback failure (native <video> error
   // event, which is the only signal available when the browser takes the
   // native-HLS path — canPlayType('application/vnd.apple.mpegurl') can return
-  // "maybe" outside Safari too — or a fatal hls.js error) it dims that stream's
-  // button and automatically advances to the next one, so a channel with a mix
-  // of working and CORS-blocked/dead streams (common with Pluto TV re-broadcasts,
-  // which lock Access-Control-Allow-Origin to their own domain) just plays instead
-  // of hanging on a silent spinner.
-  function loadStream(channel, index) {
+  // "maybe" outside Safari too — or a fatal hls.js error) the retry order is:
+  //   1. this stream direct (cheap, works for sources with open CORS)
+  //   2. this stream through PROXY_BASE, if configured (fixes CORS-locked
+  //      sources like Pluto TV re-broadcasts, at the cost of a Worker request
+  //      per segment — so it's only used when direct actually failed)
+  //   3. the next stream in the list, direct, repeating the same two steps
+  // so a channel with a mix of working, CORS-blocked, and truly dead streams
+  // just plays instead of hanging on a silent spinner.
+  function loadStream(channel, index, viaProxy = false) {
     if (index >= channel.streams.length) {
       const note = document.getElementById('player-note');
       note.textContent = 'None of this channel\'s streams loaded — it may be offline or geo-restricted right now.';
@@ -426,7 +442,8 @@
     const token = ++loadToken;
     const video = document.getElementById('player');
     const note = document.getElementById('player-note');
-    const url = channel.streams[index].url;
+    const rawUrl = channel.streams[index].url;
+    const url = viaProxy && PROXY_BASE ? proxied(rawUrl) : rawUrl;
     note.classList.remove('show');
     teardownPlayer();
 
@@ -435,6 +452,10 @@
 
     const advance = () => {
       if (token !== loadToken) return; // a newer load already superseded this one
+      if (!viaProxy && PROXY_BASE) {
+        loadStream(channel, index, true); // retry this same stream through the proxy first
+        return;
+      }
       markStreamButton(index, 'dead');
       deadStreams.add(`${channel.id}:${index}`);
       loadStream(channel, index + 1);

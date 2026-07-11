@@ -17,6 +17,20 @@ A single static `index.html` — same dark UI, category tabs, search, and player
 
 GitHub Pages, source = `main` branch, root. No build step, no functions, no `package.json`.
 
+## Optional: CORS proxy for blocked streams
+
+Some sources (notably Pluto TV re-broadcasts, reached via `jmp2.uk`) lock their manifest's `Access-Control-Allow-Origin` to their own domain — a restriction the *browser* enforces (including native `<video>` HLS playback in Safari/WebKit, not just fetch/XHR), so no header trick from a static page can get around it. Without a proxy, `loadStream()` in `index.html` just auto-skips those and plays the next working stream for the channel, if there is one.
+
+To actually unlock them, deploy `cloudflare-worker.js` as a free Cloudflare Worker:
+
+1. Sign in at [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages** → **Create** → **Create Worker**.
+2. Paste the contents of `cloudflare-worker.js` into the editor, replacing the default template.
+3. **Deploy**. You'll get a URL like `https://<name>.<your-subdomain>.workers.dev`.
+4. In `index.html`, set `const PROXY_BASE = 'https://<name>.<your-subdomain>.workers.dev';` (currently blank).
+5. Commit and push — GitHub Pages picks it up automatically.
+
+Free tier is 100k requests/day, no credit card required — plenty for personal use (each stream session uses roughly one request per HLS segment while playing, only for streams that actually needed the proxy).
+
 ## Known limitation
 
-Some public IPTV streams require a spoofed `Referer`/`User-Agent` to play, which a static frontend can't set — those show an in-player error rather than failing silently.
+Some public IPTV streams require a spoofed `Referer`/`User-Agent` to play; `cloudflare-worker.js` supports passing `&referer=`/`&ua=` query params through to the upstream request if you know what a given source expects, but `index.html` doesn't currently guess or set these automatically.
